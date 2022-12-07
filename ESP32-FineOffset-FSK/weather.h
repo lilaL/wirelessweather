@@ -2,7 +2,7 @@
 
 #include "ftoa.h"
 #include <ArduinoJson.h>
-#include <md5.h>
+#include <MD5.h>
 
 #define MSG_WH2300 36
 #define MSG_WS4000 40
@@ -14,35 +14,35 @@
 class WSBase
 {
 public:
-    //identity
+    // identity
     uint16_t msgformat = 0xffff;
     uint16_t stationID = 0xffff;
 
-    //data
-    double temperature; //in Celscius
-    uint16_t humidity;  //relative %
-    uint16_t winddir;   //in degrees North = 0
-    double windspeed;   //in km/h
-    double windgust;    //in km/h
-    double lightlux;    //in Lux
-    double rain;        //in mm
-    uint16_t UVraw;     //a.u.
-    uint8_t UVI;        //index 0-13
-    bool low_battery;   //true is low battery
+    // data
+    double temperature; // in Celscius
+    uint16_t humidity;  // relative %
+    uint16_t winddir;   // in degrees North = 0
+    double windspeed;   // in km/h
+    double windgust;    // in km/h
+    double lightlux;    // in Lux
+    double rain;        // in mm
+    uint16_t UVraw;     // a.u.
+    uint8_t UVI;        // index 0-13
+    bool low_battery;   // true is low battery
+    int battery_lvl;    // battery percentage
+    // calculated fields
+    double windspeed1m; // in km/h
+    double windgust1m;  // in km/h
+    double rain1h;      // in mm
 
-    //calculated fields
-    double windspeed1m; //in km/h
-    double windgust1m;  //in km/h
-    double rain1h;      //in mm
-
-    //RF receive
+    // RF receive
     int32_t afc;       // in Hz
     uint8_t rssi;      // in dBm
     uint8_t lna;       // in step
     uint8_t snr;       // in dB
     struct timeval at; // arrival timestamp
 
-    //default constructor
+    // default constructor
     WSBase()
     {
         msgformat = 0xFFFF;
@@ -69,14 +69,14 @@ public:
         at = (struct timeval){0};
     }
 
-    //copy constructor
+    // copy constructor
     WSBase(const WSBase &ws)
     {
-        //identity
+        // identity
         msgformat = ws.msgformat;
         stationID = stationID;
 
-        //data
+        // data
         temperature = ws.temperature;
         humidity = ws.humidity;
         winddir = ws.winddir;
@@ -88,12 +88,12 @@ public:
         UVI = ws.UVI;
         low_battery = ws.low_battery;
 
-        //calculated fields
+        // calculated fields
         windspeed1m = ws.windspeed1m;
         windgust1m = ws.windgust1m;
         rain1h = ws.rain1h;
 
-        //RF receive
+        // RF receive
         afc = ws.afc;
         rssi = ws.rssi;
         lna = ws.lna;
@@ -107,14 +107,14 @@ public:
         return false;
     };
 
-    //copy assignment operator
+    // copy assignment operator
     WSBase &operator=(const WSBase &ws)
     {
-        //identity
+        // identity
         msgformat = ws.msgformat;
         stationID = ws.stationID;
 
-        //data
+        // data
         temperature = ws.temperature;
         humidity = ws.humidity;
         winddir = ws.winddir;
@@ -126,12 +126,12 @@ public:
         UVI = ws.UVI;
         low_battery = ws.low_battery;
 
-        //calculated fields
+        // calculated fields
         windspeed1m = ws.windspeed1m;
         windgust1m = ws.windgust1m;
         rain1h = ws.rain1h;
 
-        //RF receive
+        // RF receive
         afc = ws.afc;
         rssi = ws.rssi;
         lna = ws.lna;
@@ -150,7 +150,8 @@ public:
         afc = rxafc;
     };
 
-    virtual void printtype() {
+    virtual void printtype()
+    {
         printf("Instance of WSBase\n");
     };
 
@@ -204,11 +205,69 @@ public:
     }
 };
 
+class WS80 : public WSBase
+{
+public:
+    WS80(){};
+
+    WS80(uint8_t fmt, uint8_t len, uint8_t *buf)
+    {
+        msgformat = fmt;
+        decode(fmt, buf, len);
+    }
+
+    ~WS80(){};
+
+    virtual void printtype()
+    {
+        printf("Instance of WS80\n");
+    };
+
+    bool decode(uint8_t fmt, uint8_t *b, uint8_t len)
+    {
+        stationID = (b[1] << 16) | (b[2] << 8) | (b[3]);
+        int light_raw = (b[4] << 8) | (b[5]);
+        lightlux = light_raw * 10;                                          // Lux
+        int battery_mv = (b[6] * 20);                                       // mV
+        battery_lvl = battery_mv < 1400 ? 0 : (battery_mv - 1400) / 16; // 1.4V-3.0V is 0-100
+        int flags = b[7];                                                   // to find the wind msb
+        int temp_raw = ((b[7] & 0x03) << 8) | (b[8]);
+        temperature = (temp_raw - 400) * 0.1f;
+        humidity = (b[9]);
+        windspeed = ((b[7] & 0x10) << 4) | (b[10]);
+        winddir = ((b[7] & 0x20) << 3) | (b[11]);
+        windgust = ((b[7] & 0x40) << 2) | (b[12]);
+        UVI = (b[13]);
+        int unknown = (b[14] << 8) | (b[15]);
+
+        // Initialize unsupported fields
+        UVraw = 0;
+        rain = 0;
+
+        return true;
+    };
+
+    virtual void print()
+    {
+        char fstr[30];
+        printf("%d\n\n", stationID);
+        printf("ID: %02x, ", stationID);
+        printf("T=%8s°C, ", ftoa(temperature, fstr, 1));
+        printf("relH=%3d%%, ", humidity);
+        printf("Wvel=%5skm/h, ", ftoa(windspeed, fstr, 1));
+        printf("Wmax=%5skm/h, ", ftoa(windgust, fstr, 1));
+        printf("Wdir=%3d°, ", winddir);
+        printf("Bat=%i%", battery_lvl);
+        (low_battery) ? printf("low battery") : printf("battery ok");
+        printf("\n");
+    }
+};
+
 class BR1800 : public WSBase
 {
 public:
-    BR1800() {};
-    
+    BR1800(){};
+
     BR1800(uint8_t fmt, uint8_t len, uint8_t *buf)
     {
         msgformat = fmt;
@@ -246,64 +305,64 @@ public:
         stationID = buf[1];
         // winddirection
         winddir = ((buf[3] & 0x80) << 1) | buf[2];
-        //low battery bit
+        // low battery bit
         low_battery = (buf[3] & 0x08) >> 3;
         // temperature
         int16_t temp = (((buf[3] & 0x07) << 8) | buf[4]) - 400;
         temperature = temp * 0.1;
-        //humidity
+        // humidity
         humidity = buf[5];
-        //wind speed in km/h
-        //original code had windspeedcorrectionfactor = 1.12.
-        //calibration revelaed that windspeed was reported factor 1.27 too high
-        //new windspeedcorrectionfactor = 1.12 / 1.27 = 0.88.
-        //1/1.12 = 0.89, close to calibrated 0.88. Was original factor applied wrongly?
+        // wind speed in km/h
+        // original code had windspeedcorrectionfactor = 1.12.
+        // calibration revelaed that windspeed was reported factor 1.27 too high
+        // new windspeedcorrectionfactor = 1.12 / 1.27 = 0.88.
+        // 1/1.12 = 0.89, close to calibrated 0.88. Was original factor applied wrongly?
         windspeed = (((buf[3] & 0x10) << 4) | buf[6]) * 1.12 * 0.125 * 3.6;
-        //windspeed correction is applied in stationconfig.h
-        //windspeed = (((buf[3] & 0x10) << 4) | buf[6]) * 0.88 * 0.125 * 3.6;
-        //wind gust in km/h
+        // windspeed correction is applied in stationconfig.h
+        // windspeed = (((buf[3] & 0x10) << 4) | buf[6]) * 0.88 * 0.125 * 3.6;
+        // wind gust in km/h
         windgust = buf[7] * 1.12 * 3.6;
-        //windgust = buf[7] * 0.88 * 3.6;
-        //rainfall
+        // windgust = buf[7] * 0.88 * 3.6;
+        // rainfall
         rain = ((buf[8] << 8) | buf[9]) * 0.3;
-        //uv intensity
+        // uv intensity
         UVraw = (buf[10] << 8) | buf[11];
-        //light intensity
+        // light intensity
         lightlux = ((buf[12] << 16) | (buf[13] << 8) | buf[14]) / 10.0;
 
-        //WH24 tabel
-        // UV value   UVI
-        // 0-432      0
-        // 433-851    1
-        // 852-1210   2
-        // 1211-1570  3
-        // 1571-2017  4
-        // 2018-2450  5
-        // 2451-2761  6
-        // 2762-3100  7
-        // 3101-3512  8
-        // 3513-3918  9
-        // 3919-4277  10
-        // 4278-4650  11
-        // 4651-5029  12
-        // >=5230     13
-        //uint16_t uvi_upper[] = {432, 851, 1210, 1570, 2017, 2450, 2761, 3100, 3512, 3918, 4277, 4650, 5029};
+        // WH24 tabel
+        //  UV value   UVI
+        //  0-432      0
+        //  433-851    1
+        //  852-1210   2
+        //  1211-1570  3
+        //  1571-2017  4
+        //  2018-2450  5
+        //  2451-2761  6
+        //  2762-3100  7
+        //  3101-3512  8
+        //  3513-3918  9
+        //  3919-4277  10
+        //  4278-4650  11
+        //  4651-5029  12
+        //  >=5230     13
+        // uint16_t uvi_upper[] = {432, 851, 1210, 1570, 2017, 2450, 2761, 3100, 3512, 3918, 4277, 4650, 5029};
 
-        //derived from WH18
-        // 0->98 0 (boundary between 97-98)
-        // 99->499 1 (boundary between 468-521)
-        // 500->800 2 estimated steps of 400?
-        // 751->1200 3
-        // 1201->1650 4
-        // 1651->2100 5
-        // 2101->2750 6
-        // 2751->3400 7
-        // 3401->4100 8
-        // 4101->4950 9
-        // 4951->5750 10
-        // 5751->6350 11
-        // 6351->7000 12
-        // >= 7000 13
+        // derived from WH18
+        //  0->98 0 (boundary between 97-98)
+        //  99->499 1 (boundary between 468-521)
+        //  500->800 2 estimated steps of 400?
+        //  751->1200 3
+        //  1201->1650 4
+        //  1651->2100 5
+        //  2101->2750 6
+        //  2751->3400 7
+        //  3401->4100 8
+        //  4101->4950 9
+        //  4951->5750 10
+        //  5751->6350 11
+        //  6351->7000 12
+        //  >= 7000 13
 
         uint16_t uvi_upper[] = {98, 499, 800, 1200, 1650, 2100, 2750, 3400, 4100, 4950, 5750, 6350, 7000};
 
@@ -318,8 +377,8 @@ public:
 class WH1080 : public WSBase
 {
 public:
-    WH1080() {};
-    
+    WH1080(){};
+
     WH1080(uint8_t fmt, uint8_t len, uint8_t *buf)
     {
         msgformat = fmt;
@@ -335,8 +394,8 @@ public:
 
     bool decode(uint8_t fmt, uint8_t *sbuf, uint8_t len)
     {
-        //const char *compass[] = {"N  ", "NNE", "NE ", "ENE", "E  ", "ESE", "SE ", "SSE", "S  ", "SSW", "SW ", "WSW", "W  ", "WNW", "NW ", "NNW"};
-        // station id
+        // const char *compass[] = {"N  ", "NNE", "NE ", "ENE", "E  ", "ESE", "SE ", "SSE", "S  ", "SSW", "SW ", "WSW", "W  ", "WNW", "NW ", "NNW"};
+        //  station id
         stationID = ((sbuf[0] & 0x0F) << 4) | (sbuf[1] >> 4);
         // temperature in C
         uint8_t sign = (sbuf[1] >> 3) & 1;
@@ -344,20 +403,20 @@ public:
         if (sign)
             temp = (~temp) + sign;
         temperature = temp * 0.1;
-        //humidity
+        // humidity
         humidity = sbuf[3] & 0x7F;
-        //wind speed in km/h
+        // wind speed in km/h
         windspeed = sbuf[4] * 0.34 * 3.6;
-        //wind gust in km/h
+        // wind gust in km/h
         windgust = sbuf[5] * 0.34 * 3.6;
-        //rainfall in mm
+        // rainfall in mm
         rain = (((sbuf[6] & 0x0F) << 8) | sbuf[7]) * 0.3;
 
         if (fmt == MSG_WS4000)
         {
-            //wind direction convert to degrees by mulitplication with 360/16
+            // wind direction convert to degrees by mulitplication with 360/16
             winddir = ((sbuf[8] & 0x0F) * 45) >> 2;
-            //low_battery indicator
+            // low_battery indicator
             low_battery = (sbuf[8] >> 4) == 1;
         }
         else
@@ -398,7 +457,7 @@ private:
     uint8_t length = 0;
 
 public:
-    UnknownFineOffset() {};
+    UnknownFineOffset(){};
 
     UnknownFineOffset(uint8_t fmt, uint8_t len, uint8_t *buf)
     {
@@ -458,7 +517,7 @@ public:
     }
 };
 
-//Singleton class interpeting the raw buffer to determine type of weatherstation
+// Singleton class interpeting the raw buffer to determine type of weatherstation
 class WeatherStationProcessor
 {
     uint32_t nWsSignals = 0;
@@ -510,6 +569,7 @@ public:
             {
                 mt = 0x24;
             }
+            printf("%i", mt);
             switch (mt)
             {
             case 0x5:
@@ -524,6 +584,14 @@ public:
                     WH1080 *wh1080 = new WH1080(MSG_WS3000, LEN_WS3000, buf);
                     wsObject = wh1080;
                 }
+                break;
+            }
+            case 0x8:
+            {
+                printf("well 0x8");
+
+                WS80 *ws80 = new WS80(MSG_WH2300, LEN_WH2300, buf);
+                wsObject = ws80;
                 break;
             }
             case 0x0A:
@@ -556,8 +624,8 @@ public:
                 break;
             }
             default:
-                //Check for unknown weather station type
-                //evaluate crc and checksum
+                // Check for unknown weather station type
+                // evaluate crc and checksum
                 for (int i = 6; i < length; i++)
                 {
                     crc_ok = buf[i] == _crc8(&buf[0], i);
@@ -569,14 +637,22 @@ public:
                             checksum_ok = buf[i + 1] == _checksum(&buf[0], i + 1);
                             unkLen++;
                         }
-                        //report out on succesful crc of unknown weather station
+                        int temp_raw = ((buf[7] & 0x03) << 8) | (buf[8]);
+                        float temp_c = (temp_raw - 400) * 0.1f;
+                        printf("Temp: %.6f", temp_c);
+                        int wind_avg = ((buf[7] & 0x10) << 4) | (buf[10]);
+                        int wind_dir = ((buf[7] & 0x20) << 3) | (buf[11]);
+                        int wind_max = ((buf[7] & 0x40) << 2) | (buf[12]);
+                        printf("Wind Avg.: %d", wind_avg);
+
+                        // report out on succesful crc of unknown weather station
                         UnknownFineOffset *unknown = new UnknownFineOffset(0xFF, length, buf);
                         wsObject = unknown;
                         break;
                     }
                 }
 
-                break; //crc_ok=0;
+                break; // crc_ok=0;
             }
         }
 
